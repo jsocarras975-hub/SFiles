@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -17,13 +20,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The runner image already has an Android SDK at
-      # /usr/local/lib/android/sdk with cmdline-tools on PATH.
+      # The runner image already has an Android SDK, but its
+      # cmdline-tools are not on PATH, and
       # android-actions/setup-android@v3 fails here: it runs
       # `sdkmanager tools`, and the legacy "tools" package no longer
-      # exists, so sdkmanager exits 1. Install only what is missing.
+      # exists. Point PATH at cmdline-tools and install only what
+      # this project needs.
       - name: Install Android 36 SDK
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          command -v sdkmanager
           yes | sdkmanager --licenses || true
           yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
