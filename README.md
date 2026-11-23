@@ -23,7 +23,13 @@ Native Android file manager with an APK inspection and editing suite. Kotlin, Je
 - Trash: deleted items go to a hidden .Trash folder and can be restored or deleted forever.
 
 ## Known limits
-- Untested first draft; built without access to the Android SDK.
 - Staged smali/resource/XML/file edits are held in memory until you build.
 - JKS keystores must be converted to PKCS12.
-- No network access and no root: the app is fully offline.
+- The decompiler does not recompile edits to decoded XML files yet (smali edits do rebuild).
+- RAR archives are read-only (browse and extract only).
+- The FTP server needs the INTERNET permission; it only runs while you start it, on the local Wi-Fi network.
+- On Android 11, self-installs still show the system's confirmation once; Android 12+ installs silently.
+
+## License
+
+SuperFiles is open source under the MIT License — see [LICENSE](LICENSE).

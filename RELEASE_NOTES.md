@@ -24,3 +24,5 @@ SuperFiles installs APKs, split APKs, and app bundles (.xapk, .apks, .apkm — b
 - Translation mode with .tsv export/import, strip signatures, APK optimization, split APK install, build history
 
 Signing keys are generated per device and protected by the Android Keystore. No network, no tracking, no ads.
+
+Licensed under the MIT License — Copyright (c) 2026 N3xUs Konc3ptz. See LICENSE in the repo.

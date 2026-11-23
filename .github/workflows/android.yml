@@ -90,7 +90,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          # Re-cutting the same version replaces the old release and tag, so a
+          # [release] re-run never fails on an existing v$VERSION.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release delete "v$VERSION" --yes --cleanup-tag
+          fi
+          # Rename the file itself: gh's path#label rename did not take.
+          cp "app/build/outputs/apk/release/app-release.apk" "SuperFiles-$VERSION-release.apk"
           gh release create "v$VERSION" \
             --title "SuperFiles $VERSION" \
             --notes-file RELEASE_NOTES.md \
-            "app/build/outputs/apk/release/app-release.apk#SuperFiles-$VERSION-release.apk"
+            "SuperFiles-$VERSION-release.apk"
