@@ -18,8 +18,8 @@ import org.jf.util.IndentingWriter
 /**
  * Full decompile/recompile, apktool-style:
  *
- * - Decompile writes a project folder: AndroidManifest.xml and every res/*.xml
- *   decoded to readable text, smali/ with every class disassembled, res/ and
+ * - Decompile writes a project folder: AndroidManifest.xml and every resource
+ *   XML decoded to readable text, smali/ with every class disassembled, res/ and
  *   assets/ extracted as they are.
  * - Rebuild reassembles the smali tree back into dex files and rebuilds the
  *   APK (aligned, re-signed). Edits to .smali files are picked up; edits to

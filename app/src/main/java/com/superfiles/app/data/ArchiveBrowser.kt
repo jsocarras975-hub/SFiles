@@ -63,7 +63,7 @@ object ArchiveBrowser {
             }
             "rar" -> Archive(FileInputStream(archive)).use { rar ->
                 rar.fileHeaders.map {
-                    ArchiveEntry(it.fileName, it.unpackedSize, it.isDirectory)
+                    ArchiveEntry(it.fileName, it.fullUnpackSize, it.isDirectory)
                 }
             }
             else -> error("Not a supported archive: ${archive.name}")
@@ -165,7 +165,7 @@ object ArchiveBrowser {
             "7z" -> {
                 val tmp = File(archive.parentFile, archive.name + ".tmp")
                 SevenZFile.builder().setFile(archive).get().use { sz ->
-                    SevenZOutputFile.builder().setFile(tmp).get().use { out ->
+                    SevenZOutputFile(tmp).use { out ->
                         var e = sz.nextEntry
                         while (e != null) {
                             if (e.name != file.name) {
@@ -187,7 +187,7 @@ object ArchiveBrowser {
                         entry.name = file.name
                         entry.size = file.length()
                         out.putArchiveEntry(entry)
-                        file.inputStream().use { it.copyTo(out) }
+                        file.inputStream().use { input -> out.write(input) }
                         out.closeArchiveEntry()
                     }
                 }
@@ -234,7 +234,7 @@ object ArchiveBrowser {
             "7z" -> {
                 val tmp = File(archive.parentFile, archive.name + ".tmp")
                 SevenZFile.builder().setFile(archive).get().use { sz ->
-                    SevenZOutputFile.builder().setFile(tmp).get().use { out ->
+                    SevenZOutputFile(tmp).use { out ->
                         var e = sz.nextEntry
                         while (e != null) {
                             if (e.name != entryName) {

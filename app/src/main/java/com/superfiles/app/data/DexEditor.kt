@@ -98,7 +98,7 @@ object DexEditor {
                 0, listOf(ImmutableInstruction10x(Opcode.RETURN_VOID)), emptyList(), emptyList(),
             )
             val method = ImmutableMethod(
-                type, name, emptyList(), "V", 0x1, emptyList(), impl,
+                type, name, emptyList(), "V", 0x1, emptyList(), emptySet(), impl,
             )
             ImmutableClassDef(
                 def.type, def.accessFlags, def.superclass, def.interfaces, def.sourceFile,
@@ -118,7 +118,7 @@ object DexEditor {
                 "Ljava/lang/String;" -> ImmutableStringEncodedValue("")
                 else -> null
             }
-            val field = ImmutableField(type, name, typeDesc, 0x1, initial, emptyList())
+            val field = ImmutableField(type, name, typeDesc, 0x1, initial, emptyList(), emptySet())
             ImmutableClassDef(
                 def.type, def.accessFlags, def.superclass, def.interfaces, def.sourceFile,
                 def.annotations, def.fields + field, def.methods,
@@ -135,10 +135,10 @@ object DexEditor {
         return rebuild(dex) { def ->
             if (def.type != oldType) return@rebuild def
             val methods = def.methods.map { m ->
-                ImmutableMethod(newType, m.name, m.parameters, m.returnType, m.accessFlags, m.annotations, m.implementation)
+                ImmutableMethod(newType, m.name, m.parameters, m.returnType, m.accessFlags, m.annotations, emptySet(), m.implementation)
             }
             val fields = def.fields.map { f ->
-                ImmutableField(newType, f.name, f.type, f.accessFlags, f.initialValue, f.annotations)
+                ImmutableField(newType, f.name, f.type, f.accessFlags, f.initialValue, f.annotations, emptySet())
             }
             ImmutableClassDef(
                 newType, def.accessFlags, def.superclass, def.interfaces, def.sourceFile,
