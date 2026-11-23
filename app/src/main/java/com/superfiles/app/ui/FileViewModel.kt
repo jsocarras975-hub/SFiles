@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.superfiles.app.data.ApkEditor
 import com.superfiles.app.data.ApkInspector
-import com.superfiles.app.data.AxmlEditor.ManifestEdits
+import com.superfiles.app.data.ManifestEdits
 import com.superfiles.app.data.FileItem
 import com.superfiles.app.data.FileRepository
 import com.superfiles.app.data.SortMode
