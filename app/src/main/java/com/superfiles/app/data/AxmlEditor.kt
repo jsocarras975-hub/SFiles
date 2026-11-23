@@ -9,6 +9,10 @@ data class ManifestEdits(
     val versionCode: Long? = null,
     val removePermissions: Set<String> = emptySet(),
     val addPermissions: List<String> = emptyList(),
+    /** String attributes to rewrite ("element/path@attrName" to value), e.g. install location. */
+    val manifestAttrs: Map<String, String> = emptyMap(),
+    val minSdk: Int? = null,
+    val targetSdk: Int? = null,
 )
 
 /** One string-valued attribute of a binary XML file: "element/path@attrName" to a value. */
@@ -137,6 +141,18 @@ object AxmlEditor {
                         if (name != null && name in e.removePermissions) { skip = 1; continue }
                     }
 
+                    if (el == "uses-sdk") {
+                        fun setInt(name: String, v: Int) {
+                            find(name, true)?.let { a ->
+                                b.putInt(a + 8, -1)
+                                b.put(a + 15, 0x10)
+                                b.putInt(a + 16, v)
+                            }
+                        }
+                        e.minSdk?.let { setInt("minSdkVersion", it) }
+                        e.targetSdk?.let { setInt("targetSdkVersion", it) }
+                    }
+
                     if (el == "manifest") {
                         manifestStartIndex = out.size
                         find("package", false)?.let { a ->
@@ -192,7 +208,8 @@ object AxmlEditor {
             out.addAll(manifestStartIndex + 1, extra)
         }
 
-        return join(pool, utf8, out)
+        val joined = join(pool, utf8, out)
+        return if (e.manifestAttrs.isEmpty()) joined else editAny(joined, e.manifestAttrs)
     }
 
     /** A <uses-permission android:name="..."/> element as start + end chunks. */

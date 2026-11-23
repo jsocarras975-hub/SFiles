@@ -10,6 +10,10 @@ object ResourceStaging {
         byApk.getOrPut(apk.absolutePath) { LinkedHashMap() }[id] = value
     }
 
+    fun remove(apk: File, id: String) {
+        byApk[apk.absolutePath]?.remove(id)
+    }
+
     fun has(apk: File, id: String) = byApk[apk.absolutePath]?.containsKey(id) == true
     fun list(apk: File): Map<String, String> = byApk[apk.absolutePath]?.toMap().orEmpty()
     fun count(apk: File) = byApk[apk.absolutePath]?.size ?: 0

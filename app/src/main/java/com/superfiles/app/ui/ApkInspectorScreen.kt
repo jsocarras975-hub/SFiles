@@ -105,6 +105,11 @@ fun ApkInspectorScreen(apk: File, onClose: () -> Unit) {
     // Hoisted so the Search tab can jump straight to a class or a filtered resource list.
     var openClass by remember { mutableStateOf<SmaliTools.ClassRef?>(null) }
     var resQuery by remember { mutableStateOf("") }
+    var showTranslate by remember { mutableStateOf(false) }
+    if (showTranslate) {
+        TranslationScreen(apk) { showTranslate = false }
+        return
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -131,7 +136,7 @@ fun ApkInspectorScreen(apk: File, onClose: () -> Unit) {
                 6 -> SearchTab(apk,
                     onOpenClass = { openClass = it; tab = 5 },
                     onOpenResources = { resQuery = it; tab = 4 })
-                else -> EditTab(apk)
+                else -> EditTab(apk) { showTranslate = true }
             }
         }
     }
@@ -408,13 +413,13 @@ private fun SearchBox(value: String, hint: String, onChange: (String) -> Unit) {
 private val PKG_REGEX = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
 
 @Composable
-private fun EditTab(apk: File) {
+private fun EditTab(apk: File, onTranslate: () -> Unit) {
     val ctx = LocalContext.current
-    Loaded(apk, { ApkInspector.overview(ctx, apk) }) { o -> EditForm(apk, o) }
+    Loaded(apk, { ApkInspector.overview(ctx, apk) }) { o -> EditForm(apk, o, onTranslate) }
 }
 
 @Composable
-private fun EditForm(apk: File, o: ApkOverview) {
+private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var pkg by remember { mutableStateOf(o.pkg) }
@@ -430,6 +435,10 @@ private fun EditForm(apk: File, o: ApkOverview) {
     var xmlCount by remember { mutableIntStateOf(XmlStaging.count(apk)) }
     var newPerm by remember { mutableStateOf("") }
     var addedPerms by remember { mutableStateOf(listOf<String>()) }
+    var showQuick by remember { mutableStateOf(false) }
+    var quickAttrs by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var quickMinSdk by remember { mutableStateOf<Int?>(null) }
+    var quickTargetSdk by remember { mutableStateOf<Int?>(null) }
     var keyInfo by remember { mutableStateOf("Loading...") }
     var keyVersion by remember { mutableIntStateOf(0) }
     var pendingKey by remember { mutableStateOf<Uri?>(null) }
@@ -477,6 +486,9 @@ private fun EditForm(apk: File, o: ApkOverview) {
                     versionCode = code.takeIf { it != o.versionCode },
                     removePermissions = removed,
                     addPermissions = addedPerms,
+                    manifestAttrs = quickAttrs,
+                    minSdk = quickMinSdk,
+                    targetSdk = quickTargetSdk,
                 )
                 val out = File(apk.parentFile, apk.nameWithoutExtension + "-mod.apk")
                 busy = true
@@ -508,6 +520,29 @@ private fun EditForm(apk: File, o: ApkOverview) {
                         status = "Failed: ${r.exceptionOrNull()?.message}"
                     }
                 }
+            }
+        }
+    }
+
+    /** Writes a copy of the APK with signatures stripped, or optimized (smaller, deduped). */
+    fun stripOrOptimize(optimize: Boolean) {
+        val suffix = if (optimize) "-optimized.apk" else "-stripped.apk"
+        val out = File(apk.parentFile, apk.nameWithoutExtension + suffix)
+        busy = true
+        output = null
+        status = if (optimize) "Optimizing..." else "Stripping signatures..."
+        scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (optimize) ApkEditor.optimize(apk, out) else ApkEditor.stripSignatures(apk, out)
+                }
+            }
+            busy = false
+            if (r.isSuccess) {
+                status = "Saved ${out.name} (${formatSize(out.length())})"
+                output = out
+            } else {
+                status = "Failed: ${r.exceptionOrNull()?.message}"
             }
         }
     }
@@ -565,6 +600,23 @@ private fun EditForm(apk: File, o: ApkOverview) {
                 }) { Text("Import") }
             },
             dismissButton = { TextButton(onClick = { pendingKey = null; keyPass = "" }) { Text("Cancel") } },
+        )
+    }
+
+    if (showQuick) {
+        QuickManifestDialog(
+            apk = apk,
+            onApply = { attrs, min, target ->
+                quickAttrs = attrs
+                quickMinSdk = min
+                quickTargetSdk = target
+                showQuick = false
+            },
+            onStaged = {
+                resCount = ResourceStaging.count(apk)
+                fileCount = FileReplacementStaging.count(apk)
+            },
+            onDismiss = { showQuick = false },
         )
     }
 
@@ -671,9 +723,160 @@ private fun EditForm(apk: File, o: ApkOverview) {
                 Button(enabled = !busy, onClick = { doBuild(true) }) { Text("Clone app") }
             }
         }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { showQuick = true }) { Text("Quick manifest edits") }
+                Button(onClick = onTranslate) { Text("Translate strings") }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy, onClick = { stripOrOptimize(false) }) { Text("Strip signatures") }
+                Button(enabled = !busy, onClick = { stripOrOptimize(true) }) { Text("Optimize APK") }
+            }
+        }
+        if (quickAttrs.isNotEmpty() || quickMinSdk != null || quickTargetSdk != null) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Quick manifest edits will be included", Modifier.weight(1f))
+                    TextButton(onClick = { quickAttrs = emptyMap(); quickMinSdk = null; quickTargetSdk = null }) {
+                        Text("Discard")
+                    }
+                }
+            }
+        }
         status?.let { item { Text(it) } }
         output?.let { f -> item { Button(onClick = { install(f) }) { Text("Install") } } }
     }
+}
+
+/** One dialog for the common manifest tweaks: app name, icon, install location, SDK levels. */
+@Composable
+private fun QuickManifestDialog(
+    apk: File,
+    onApply: (attrs: Map<String, String>, minSdk: Int?, targetSdk: Int?) -> Unit,
+    onStaged: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val manifest by produceState<String?>(null, apk) {
+        value = withContext(Dispatchers.IO) { runCatching { ApkInspector.manifest(apk) }.getOrNull() }
+    }
+    fun attr(name: String): String? =
+        manifest?.let { Regex("""$name="([^"]*)"""").find(it)?.groupValues?.get(1) }
+    val curLabel = attr("android:label")
+    val curIcon = attr("android:icon")
+    val curInstall = attr("android:installLocation") ?: "auto"
+    val curMin = attr("android:minSdkVersion") ?: ""
+    val curTarget = attr("android:targetSdkVersion") ?: ""
+
+    var appName by remember(curLabel) { mutableStateOf(curLabel ?: "") }
+    var installLoc by remember(curInstall) { mutableStateOf(curInstall) }
+    var minSdkText by remember(curMin) { mutableStateOf(curMin) }
+    var targetSdkText by remember(curTarget) { mutableStateOf(curTarget) }
+    var iconName by remember { mutableStateOf<String?>(null) }
+    var iconBytes by remember { mutableStateOf<ByteArray?>(null) }
+    val pickIcon = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            if (bytes != null) {
+                iconBytes = bytes
+                iconName = uri.lastPathSegment ?: "image"
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Quick manifest edits") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (manifest == null) {
+                    Text("Loading manifest…", style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(
+                    value = appName,
+                    onValueChange = { appName = it },
+                    label = { Text("App name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (curLabel?.startsWith("@string/") == true) {
+                    Text(
+                        "The label is $curLabel — editing it changes that string resource.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("auto", "internalOnly", "preferExternal").forEach { loc ->
+                        FilterChip(
+                            selected = installLoc == loc,
+                            onClick = { installLoc = loc },
+                            label = { Text(loc) },
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = minSdkText,
+                        onValueChange = { minSdkText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Min SDK") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = targetSdkText,
+                        onValueChange = { targetSdkText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Target SDK") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { pickIcon.launch("image/*") }) { Text("Pick icon") }
+                    iconName?.let { Text(it, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall) }
+                    curIcon?.let { Text("Current: $it", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val attrs = mutableMapOf<String, String>()
+                val label = appName.trim()
+                if (label.isNotEmpty() && label != curLabel) {
+                    if (curLabel?.startsWith("@string/") == true) {
+                        ResourceStaging.put(apk, "string/" + curLabel.removePrefix("@string/"), label)
+                        onStaged()
+                    } else {
+                        attrs["manifest/application@android:label"] = label
+                    }
+                }
+                if (installLoc != curInstall) attrs["manifest@android:installLocation"] = installLoc
+                val min = minSdkText.toIntOrNull()?.takeIf { it.toString() != curMin }
+                val target = targetSdkText.toIntOrNull()?.takeIf { it.toString() != curTarget }
+                val bytes = iconBytes
+                if (bytes != null && curIcon?.startsWith("@") == true) {
+                    val ref = curIcon.removePrefix("@")
+                    val parts = ref.split("/")
+                    if (parts.size == 2) {
+                        val (type, name) = parts
+                        val entries = runCatching { ApkInspector.entries(apk) }.getOrNull().orEmpty()
+                            .filter { it.name.matches(Regex("res/$type[^/]*/$name\\.(png|webp|jpg|jpeg)")) }
+                        entries.forEach { FileReplacementStaging.put(ctx, apk, it.name, bytes) }
+                        if (entries.isNotEmpty()) onStaged()
+                    }
+                }
+                onApply(attrs, min, target)
+            }) { Text("Apply") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

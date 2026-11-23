@@ -90,10 +90,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.superfiles.app.data.Bookmarks
 import com.superfiles.app.data.Favorites
 import com.superfiles.app.data.FileItem
 import com.superfiles.app.data.FileRepository
 import com.superfiles.app.data.SortMode
+import com.superfiles.app.data.SplitInstaller
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -112,6 +114,10 @@ private val TEXT_EXTENSIONS = setOf(
     "csv", "log", "html", "css", "js", "yml", "yaml", "toml",
 )
 
+private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
+private val AUDIO_EXTENSIONS = setOf("mp3", "ogg", "wav", "m4a", "flac")
+private val FONT_EXTENSIONS = setOf("ttf", "otf")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileManagerScreen(
@@ -126,22 +132,72 @@ fun FileManagerScreen(
     var prompt by remember { mutableStateOf<Prompt?>(null) }
     var props by remember { mutableStateOf<FileItem?>(null) }
     var textFile by remember { mutableStateOf<File?>(null) }
+    var hexFile by remember { mutableStateOf<File?>(null) }
+    var diffPair by remember { mutableStateOf<Pair<File, File>?>(null) }
+    var showGrep by remember { mutableStateOf(false) }
+    var imageFile by remember { mutableStateOf<File?>(null) }
+    var audioFile by remember { mutableStateOf<File?>(null) }
+    var fontFile by remember { mutableStateOf<File?>(null) }
     var favVersion by remember { mutableIntStateOf(0) }
     val favorites = remember(favVersion) { Favorites.list(ctx) }
+    var bookmarkVersion by remember { mutableIntStateOf(0) }
+    val bookmarks = remember(bookmarkVersion) { Bookmarks.list(ctx) }
     val selecting = st.selected.isNotEmpty()
     val searching = st.query != null
     val inTrash = st.inTrash
     val atRoot = st.dir.absolutePath == vm.root.absolutePath
+    val subScreenOpen = textFile != null || hexFile != null || diffPair != null || showGrep ||
+        imageFile != null || audioFile != null || fontFile != null
 
-    BackHandler(enabled = textFile == null && (selecting || searching || inTrash || !atRoot)) { vm.onBack() }
+    BackHandler(enabled = !subScreenOpen && (selecting || searching || inTrash || !atRoot)) { vm.onBack() }
 
     LaunchedEffect(st.message) {
         st.message?.let { snackbar.showSnackbar(it); vm.consumeMessage() }
     }
 
+    /** Opens a file in the right built-in viewer, or another app when there isn't one. */
+    fun openViewerFor(f: File) {
+        when (f.extension.lowercase()) {
+            in TEXT_EXTENSIONS -> textFile = f
+            in IMAGE_EXTENSIONS -> imageFile = f
+            in AUDIO_EXTENSIONS -> audioFile = f
+            in FONT_EXTENSIONS -> fontFile = f
+            else -> openFile(ctx, f)
+        }
+    }
+
     val editingFile = textFile
     if (editingFile != null) {
         TextEditorScreen(editingFile) { textFile = null; vm.refresh() }
+        return
+    }
+    val hex = hexFile
+    if (hex != null) {
+        HexEditorScreen(hex) { hexFile = null; vm.refresh() }
+        return
+    }
+    val diff = diffPair
+    if (diff != null) {
+        DiffScreen(diff.first, diff.second) { diffPair = null }
+        return
+    }
+    if (showGrep) {
+        GrepScreen(st.dir, { f -> showGrep = false; openViewerFor(f) }, { showGrep = false })
+        return
+    }
+    val img = imageFile
+    if (img != null) {
+        ImageViewerScreen(img) { imageFile = null }
+        return
+    }
+    val aud = audioFile
+    if (aud != null) {
+        AudioPlayerScreen(aud) { audioFile = null }
+        return
+    }
+    val font = fontFile
+    if (font != null) {
+        FontPreviewScreen(font) { fontFile = null }
         return
     }
 
@@ -172,6 +228,53 @@ fun FileManagerScreen(
                         IconButton(onClick = vm::zipSelected) { Icon(Icons.Default.Archive, "Zip") }
                         IconButton(onClick = { shareFiles(ctx, st.selected.map { File(it) }) }) {
                             Icon(Icons.Default.Share, "Share")
+                        }
+                        var batchMenu by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { batchMenu = true }) { Icon(Icons.Default.MoreVert, "Batch actions") }
+                            DropdownMenu(expanded = batchMenu, onDismissRequest = { batchMenu = false }) {
+                                val apks = st.selected.map { File(it) }
+                                    .filter { it.extension.equals("apk", ignoreCase = true) }
+                                val twoFiles = st.selected.map { File(it) }.count { !it.isDirectory } == 2
+                                DropdownMenuItem(
+                                    text = { Text("Extract APKs") },
+                                    onClick = { batchMenu = false; vm.batchExtractApks() },
+                                    enabled = apks.isNotEmpty(),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Sign APKs") },
+                                    onClick = { batchMenu = false; vm.batchSignApks(ctx) },
+                                    enabled = apks.isNotEmpty(),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Install splits (${apks.size} APKs)") },
+                                    onClick = {
+                                        batchMenu = false
+                                        runCatching { SplitInstaller.installSplits(ctx, apks) }
+                                            .onFailure {
+                                                Toast.makeText(ctx, it.message ?: "Install failed", Toast.LENGTH_SHORT).show()
+                                            }
+                                    },
+                                    enabled = apks.size >= 2,
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Bookmark") },
+                                    onClick = {
+                                        batchMenu = false
+                                        st.selected.forEach { Bookmarks.toggle(ctx, it) }
+                                        bookmarkVersion++
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Compare") },
+                                    onClick = {
+                                        batchMenu = false
+                                        val files = st.selected.map { File(it) }.filter { !it.isDirectory }
+                                        if (files.size == 2) diffPair = files[0] to files[1]
+                                    },
+                                    enabled = twoFiles,
+                                )
+                            }
                         }
                         if (st.selected.size == 1) {
                             IconButton(onClick = {
@@ -272,6 +375,10 @@ fun FileManagerScreen(
                                             textFile = createTextFile(st.dir)
                                         },
                                     )
+                                    DropdownMenuItem(
+                                        text = { Text("Search in files") },
+                                        onClick = { moreMenu = false; showGrep = true },
+                                    )
                                 }
                             }
                         },
@@ -338,6 +445,22 @@ fun FileManagerScreen(
                             )
                         }
                     }
+                    if (atRoot && bookmarks.isNotEmpty() && !searching && !inTrash) {
+                        item {
+                            Text("Bookmarks", style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                        }
+                        items(bookmarks, key = { "bm:${it.path}" }) { f ->
+                            ListItem(
+                                headlineContent = { Text(f.name) },
+                                supportingContent = { Text(f.parent.orEmpty()) },
+                                leadingContent = { Icon(Icons.Default.Star, null) },
+                                modifier = Modifier.clickable {
+                                    if (f.isDirectory) vm.open(f) else openViewerFor(f)
+                                },
+                            )
+                        }
+                    }
                     items(st.items, key = { it.path }) { item ->
                         FileRow(
                             item = item,
@@ -349,8 +472,7 @@ fun FileManagerScreen(
                                     selecting -> vm.toggleSelect(item.path)
                                     item.isDir -> vm.open(item.file)
                                     item.file.extension.equals("apk", ignoreCase = true) -> onOpenApk(item.file)
-                                    item.file.extension.lowercase() in TEXT_EXTENSIONS -> textFile = item.file
-                                    else -> openFile(ctx, item.file)
+                                    else -> openViewerFor(item.file)
                                 }
                             },
                             onLongClick = { vm.toggleSelect(item.path) },
@@ -367,6 +489,7 @@ fun FileManagerScreen(
             onDismiss = { props = null },
             onExtractZip = { vm.extractZip(item) },
             onEditText = { textFile = item.file },
+            onHexEdit = { hexFile = item.file },
         )
     }
 
@@ -550,6 +673,7 @@ private fun PropertiesDialog(
     onDismiss: () -> Unit,
     onExtractZip: () -> Unit,
     onEditText: () -> Unit,
+    onHexEdit: () -> Unit,
 ) {
     val size by produceState<Long?>(null, item.path) {
         value = withContext(Dispatchers.IO) { FileRepository.folderSize(item.file) }
@@ -585,6 +709,9 @@ private fun PropertiesDialog(
                 }
                 if (!item.isDir && item.file.extension.lowercase() in TEXT_EXTENSIONS) {
                     TextButton(onClick = { onEditText(); onDismiss() }) { Text("Edit") }
+                }
+                if (!item.isDir) {
+                    TextButton(onClick = { onHexEdit(); onDismiss() }) { Text("Hex edit") }
                 }
                 TextButton(onClick = onDismiss) { Text("Close") }
             }

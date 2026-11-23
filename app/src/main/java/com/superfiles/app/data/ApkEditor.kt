@@ -71,17 +71,37 @@ object ApkEditor {
             n.endsWith(".RSA") || n.endsWith(".DSA") || n.endsWith(".EC"))
     }
 
+    /** Copies the APK without any signature: META-INF files are dropped and the v2/v3
+     * signing block is not carried over, since the archive is rewritten from scratch. */
+    fun stripSignatures(src: File, dst: File) {
+        rewrite(src, dst, null, emptyMap(), null, emptyMap())
+    }
+
+    /** Shrinks an APK: drops signature files and junk, de-duplicates entries, and
+     * deflates stored entries that don't need to stay stored (native .so files do). */
+    fun optimize(src: File, dst: File) {
+        rewrite(src, dst, null, emptyMap(), null, emptyMap(), optimize = true)
+    }
+
+    private fun isJunk(name: String): Boolean =
+        name.endsWith(".DS_Store") || name.startsWith("__MACOSX/")
+
     private fun rewrite(
-        src: File, dst: File, edits: ManifestEdits, dexReplacements: Map<String, File>,
+        src: File, dst: File, edits: ManifestEdits?, dexReplacements: Map<String, File>,
         arscReplacement: ByteArray?, xmlReplacements: Map<String, ByteArray>,
+        optimize: Boolean = false,
     ) {
         ZipFile(src).use { zin ->
             val counter = CountingStream(BufferedOutputStream(FileOutputStream(dst)))
             ZipOutputStream(counter).use { zout ->
+                val seen = HashSet<String>()
                 for (e in zin.entries().asSequence()) {
                     if (e.isDirectory || isOldSignature(e.name)) continue
+                    if (optimize && isJunk(e.name)) continue
+                    if (!seen.add(e.name)) continue // duplicate entry: keep the first
                     val edited = when {
-                        e.name == "AndroidManifest.xml" -> AxmlEditor.edit(zin.getInputStream(e).readBytes(), edits)
+                        e.name == "AndroidManifest.xml" && edits != null ->
+                            AxmlEditor.edit(zin.getInputStream(e).readBytes(), edits)
                         e.name == "resources.arsc" && arscReplacement != null -> arscReplacement
                         e.name in dexReplacements -> dexReplacements.getValue(e.name).readBytes()
                         e.name in xmlReplacements -> xmlReplacements.getValue(e.name)
@@ -89,7 +109,7 @@ object ApkEditor {
                     }
 
                     val out = ZipEntry(e.name)
-                    if (e.method == ZipEntry.STORED) {
+                    if (e.method == ZipEntry.STORED && !(optimize && !e.name.endsWith(".so"))) {
                         val size = edited?.size?.toLong() ?: e.size
                         out.method = ZipEntry.STORED
                         out.size = size

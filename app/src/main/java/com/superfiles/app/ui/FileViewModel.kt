@@ -1,8 +1,12 @@
 package com.superfiles.app.ui
 
+import android.content.Context
 import android.os.Environment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.superfiles.app.data.ApkEditor
+import com.superfiles.app.data.ApkInspector
+import com.superfiles.app.data.AxmlEditor.ManifestEdits
 import com.superfiles.app.data.FileItem
 import com.superfiles.app.data.FileRepository
 import com.superfiles.app.data.SortMode
@@ -165,6 +169,54 @@ class FileViewModel : ViewModel() {
             _state.update {
                 it.copy(message = if (r.isSuccess) "Zipped to ${r.getOrThrow().name}"
                 else (r.exceptionOrNull()?.message ?: "Zip failed"))
+            }
+            refresh()
+        }
+    }
+
+    /** Copies every selected APK into Downloads/SuperFiles/extracted. */
+    fun batchExtractApks() {
+        val apks = _state.value.selected.map { File(it) }
+            .filter { it.extension.equals("apk", ignoreCase = true) }
+        if (apks.isEmpty()) return
+        _state.update { it.copy(selected = emptySet()) }
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dest = File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                        "SuperFiles/extracted",
+                    ).apply { mkdirs() }
+                    apks.forEach { it.copyTo(File(dest, it.name), overwrite = true) }
+                }
+            }
+            _state.update {
+                it.copy(message = if (r.isSuccess) "Extracted ${apks.size} APKs"
+                else (r.exceptionOrNull()?.message ?: "Extract failed"))
+            }
+            refresh()
+        }
+    }
+
+    /** Rebuilds and re-signs every selected APK, writing "<name>-signed.apk" next to it. */
+    fun batchSignApks(ctx: Context) {
+        val apks = _state.value.selected.map { File(it) }
+            .filter { it.extension.equals("apk", ignoreCase = true) }
+        if (apks.isEmpty()) return
+        _state.update { it.copy(selected = emptySet()) }
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    for (apk in apks) {
+                        val o = ApkInspector.overview(ctx, apk)
+                        val out = File(apk.parentFile, apk.nameWithoutExtension + "-signed.apk")
+                        ApkEditor.build(ctx, apk, ManifestEdits(), o.minSdk, out)
+                    }
+                }
+            }
+            _state.update {
+                it.copy(message = if (r.isSuccess) "Signed ${apks.size} APKs"
+                else (r.exceptionOrNull()?.message ?: "Sign failed"))
             }
             refresh()
         }
