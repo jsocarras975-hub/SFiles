@@ -20,6 +20,8 @@
          don't survive a restore, so a restored backup would orphan the keystore. -->
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="SuperFiles"
         android:theme="@style/Theme.SuperFiles">
 
