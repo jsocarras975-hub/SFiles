@@ -217,12 +217,14 @@ private fun SignatureVerificationLine(apk: File, sig: SignatureStatus) {
     val check by produceState<SigVerification?>(null, apk) {
         value = withContext(Dispatchers.IO) { runCatching { SignatureCheck.verify(apk) }.getOrNull() }
     }
+    // A delegated property can't be smart-cast, so capture it in a plain local first.
+    val c = check
     val text = when {
-        check == null -> "Verifying signatures…"
+        c == null -> "Verifying signatures…"
         !sig.v1 && !sig.v2 && !sig.v3 && !sig.v31 -> "Not signed"
-        check.verified -> "Signatures verified ✓ (v1 ${if (check.v1Verified) "✓" else "✗"} · " +
-            "v2 ${if (check.v2Verified) "✓" else "✗"} · v3 ${if (check.v3Verified) "✓" else "✗"})"
-        else -> "Signature INVALID: ${check.errors.firstOrNull() ?: "verification failed"}"
+        c.verified -> "Signatures verified ✓ (v1 ${if (c.v1Verified) "✓" else "✗"} · " +
+            "v2 ${if (c.v2Verified) "✓" else "✗"} · v3 ${if (c.v3Verified) "✓" else "✗"})"
+        else -> "Signature INVALID: ${c.errors.firstOrNull() ?: "verification failed"}"
     }
     Text(text, style = MaterialTheme.typography.bodyMedium)
 }
