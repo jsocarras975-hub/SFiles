@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,7 +34,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.superfiles.app.ui.ApkInspectorScreen
+import com.superfiles.app.ui.BuildHistoryScreen
 import com.superfiles.app.ui.FileManagerScreen
+import com.superfiles.app.ui.InstalledAppsScreen
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,8 +67,22 @@ private fun AppRoot() {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         granted = Environment.isExternalStorageManager()
     }
-    if (granted) {
-        FileManagerScreen()
+    // The path (not the File) is saved, so rotating the phone doesn't close the inspector.
+    var apkPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var screen by rememberSaveable { mutableStateOf("") }
+    val openApk = apkPath?.let { File(it) }
+    if (granted && openApk != null) {
+        ApkInspectorScreen(openApk) { apkPath = null }
+    } else if (granted && screen == "apps") {
+        InstalledAppsScreen { screen = "" }
+    } else if (granted && screen == "history") {
+        BuildHistoryScreen { screen = "" }
+    } else if (granted) {
+        FileManagerScreen(
+            onOpenApk = { apkPath = it.absolutePath },
+            onShowApps = { screen = "apps" },
+            onShowHistory = { screen = "history" },
+        )
     } else {
         Column(
             Modifier.fillMaxSize().padding(32.dp),

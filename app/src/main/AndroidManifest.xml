@@ -2,9 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Lets the app list launchable apps so their APKs can be extracted. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!-- Backups are off: this app holds APK signing keys, and Android Keystore keys
+         don't survive a restore, so a restored backup would orphan the keystore. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="SuperFiles"
         android:theme="@style/Theme.SuperFiles">
 

@@ -5,6 +5,7 @@ import java.util.Date
 import java.util.Locale
 
 fun formatSize(bytes: Long): String {
+    if (bytes < 0) return "—" // unknown size (e.g. a zip entry that doesn't report one)
     if (bytes < 1024) return "$bytes B"
     val units = arrayOf("KB", "MB", "GB", "TB")
     var v = bytes.toDouble()

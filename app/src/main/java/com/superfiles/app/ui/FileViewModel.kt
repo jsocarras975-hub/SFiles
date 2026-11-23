@@ -28,6 +28,10 @@ data class UiState(
     val query: String? = null,
     val loading: Boolean = false,
     val message: String? = null,
+    val inTrash: Boolean = false,
+    /** Copy/move progress: (bytes done, total bytes) plus the item being copied. */
+    val progress: Pair<Long, Long>? = null,
+    val progressName: String? = null,
 )
 
 class FileViewModel : ViewModel() {
@@ -37,27 +41,48 @@ class FileViewModel : ViewModel() {
     private val _state = MutableStateFlow(UiState(dir = root))
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var loadJob: Job? = null
+    private var loadGen = 0
 
-    init { refresh() }
+    init {
+        refresh()
+        // Trash older than 30 days is cleaned up automatically.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { FileRepository.cleanOldTrash(root) }
+        }
+    }
 
     private fun isRoot(f: File) = f.canonicalPath == root.canonicalPath
 
     fun refresh() {
         loadJob?.cancel()
+        // A cancelled load must not clear the spinner of the load that replaced it.
+        val gen = ++loadGen
         loadJob = viewModelScope.launch {
             val s = _state.value
             _state.update { it.copy(loading = true) }
-            val items = withContext(Dispatchers.IO) {
-                val q = s.query
-                if (!q.isNullOrBlank()) FileRepository.search(s.dir, q, s.showHidden)
-                else FileRepository.list(s.dir, s.showHidden, s.sort)
+            try {
+                val items = withContext(Dispatchers.IO) {
+                    val q = s.query
+                    when {
+                        s.inTrash -> FileRepository.listTrash(root)
+                        !q.isNullOrBlank() -> FileRepository.search(s.dir, q, s.showHidden)
+                        else -> FileRepository.list(s.dir, s.showHidden, s.sort)
+                    }
+                }
+                _state.update { it.copy(items = items, loading = false) }
+            } finally {
+                if (gen == loadGen) _state.update { it.copy(loading = false) }
             }
-            _state.update { it.copy(items = items, loading = false) }
         }
     }
 
     fun open(dir: File) {
-        _state.update { it.copy(dir = dir, selected = emptySet(), query = null) }
+        _state.update { it.copy(dir = dir, selected = emptySet(), query = null, inTrash = false) }
+        refresh()
+    }
+
+    fun openTrash() {
+        _state.update { it.copy(inTrash = true, selected = emptySet(), query = null) }
         refresh()
     }
 
@@ -66,6 +91,7 @@ class FileViewModel : ViewModel() {
         when {
             s.selected.isNotEmpty() -> clearSelection()
             s.query != null -> setQuery(null)
+            s.inTrash -> open(root)
             !isRoot(s.dir) -> s.dir.parentFile?.let { open(it) }
         }
     }
@@ -103,19 +129,81 @@ class FileViewModel : ViewModel() {
         val s = _state.value
         val cb = s.clipboard ?: return
         val dest = s.dir
-        _state.update { it.copy(clipboard = null) }
-        runOp("Done") {
-            cb.paths.forEach { p ->
-                val f = File(p)
-                if (cb.cut) FileRepository.move(f, dest) else FileRepository.copy(f, dest)
+        // The clipboard is cleared only after a successful paste, so a failed paste can be retried.
+        viewModelScope.launch {
+            val err = withContext(Dispatchers.IO) {
+                runCatching {
+                    cb.paths.forEach { p ->
+                        val f = File(p)
+                        val report: (Long, Long, String) -> Unit = { done, total, name ->
+                            _state.update { it.copy(progress = done to total, progressName = name) }
+                        }
+                        if (cb.cut) FileRepository.move(f, dest, report) else FileRepository.copy(f, dest, report)
+                    }
+                }.exceptionOrNull()
             }
+            _state.update {
+                it.copy(
+                    message = if (err != null) (err.message ?: "Operation failed") else "Done",
+                    clipboard = if (err == null) null else it.clipboard,
+                    progress = null,
+                    progressName = null,
+                )
+            }
+            refresh()
         }
     }
 
-    fun deleteSelected() {
+    fun zipSelected() {
+        val paths = _state.value.selected.toList()
+        val dir = _state.value.dir
+        _state.update { it.copy(selected = emptySet()) }
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching { FileRepository.zipFiles(paths.map { File(it) }, dir) }
+            }
+            _state.update {
+                it.copy(message = if (r.isSuccess) "Zipped to ${r.getOrThrow().name}"
+                else (r.exceptionOrNull()?.message ?: "Zip failed"))
+            }
+            refresh()
+        }
+    }
+
+    fun extractZip(item: FileItem) {
+        val dir = _state.value.dir
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching { FileRepository.unzip(item.file, dir) }
+            }
+            _state.update {
+                it.copy(message = if (r.isSuccess) "Extracted to ${r.getOrThrow().name}"
+                else (r.exceptionOrNull()?.message ?: "Extract failed"))
+            }
+            refresh()
+        }
+    }
+
+    fun trashSelected() {
         val paths = _state.value.selected.toList()
         _state.update { it.copy(selected = emptySet()) }
-        runOp("Deleted") { paths.forEach { FileRepository.delete(File(it)) } }
+        runOp("Moved to trash") { paths.forEach { FileRepository.trash(root, File(it)) } }
+    }
+
+    fun restoreSelected() {
+        val paths = _state.value.selected.toList()
+        _state.update { it.copy(selected = emptySet()) }
+        runOp("Restored") { paths.forEach { FileRepository.restore(root, File(it)) } }
+    }
+
+    fun deleteForeverSelected() {
+        val paths = _state.value.selected.toList()
+        _state.update { it.copy(selected = emptySet()) }
+        runOp("Deleted") { paths.forEach { FileRepository.deleteForever(File(it)) } }
+    }
+
+    fun emptyTrash() {
+        runOp("Trash emptied") { FileRepository.emptyTrash(root) }
     }
 
     fun rename(item: FileItem, newName: String) {
