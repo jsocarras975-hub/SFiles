@@ -102,7 +102,7 @@ object DexEditor {
             )
             val method = ImmutableMethod(
                 type, name, emptyList<MethodParameter>(), "V", 0x1,
-                emptyList<Annotation>(), emptySet<HiddenApiRestriction>(), impl,
+                emptySet<Annotation>(), emptySet<HiddenApiRestriction>(), impl,
             )
             ImmutableClassDef(
                 def.type, def.accessFlags, def.superclass, def.interfaces, def.sourceFile,
