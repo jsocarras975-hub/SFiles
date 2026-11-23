@@ -15,8 +15,24 @@ android {
         versionCode = 6
         versionName = "0.6.0"
     }
+    signingConfigs {
+        // Release signing comes from GitHub Actions secrets (KEYSTORE_FILE etc.).
+        // Local builds without them fall back to an unsigned release config.
+        create("release") {
+            val ksFile = System.getenv("KEYSTORE_FILE")
+            if (ksFile != null) {
+                storeFile = file(ksFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
