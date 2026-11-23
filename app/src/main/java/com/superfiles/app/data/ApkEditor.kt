@@ -23,21 +23,26 @@ object ApkEditor {
         val tmp = File(ctx.cacheDir, "unsigned-aligned.apk")
         try {
             rewrite(src, tmp, edits, dexReplacements, arscReplacement, xmlReplacements)
-            val key = SigningKeys.get(ctx)
-            val signer = ApkSigner.SignerConfig.Builder("superfiles", key.key, listOf(key.cert)).build()
-            dst.delete()
-            ApkSigner.Builder(listOf(signer))
-                .setInputApk(tmp)
-                .setOutputApk(dst)
-                .setMinSdkVersion(minSdk.coerceAtLeast(1))
-                .setV1SigningEnabled(true)
-                .setV2SigningEnabled(true)
-                .setV3SigningEnabled(true)
-                .build()
-                .sign()
+            signApk(ctx, tmp, dst, minSdk)
         } finally {
             tmp.delete()
         }
+    }
+
+    /** Signs an already-rewritten APK with this device's key (v1+v2+v3). */
+    fun signApk(ctx: Context, src: File, dst: File, minSdk: Int) {
+        val key = SigningKeys.get(ctx)
+        val signer = ApkSigner.SignerConfig.Builder("superfiles", key.key, listOf(key.cert)).build()
+        dst.delete()
+        ApkSigner.Builder(listOf(signer))
+            .setInputApk(src)
+            .setOutputApk(dst)
+            .setMinSdkVersion(minSdk.coerceAtLeast(1))
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .build()
+            .sign()
     }
 
     private class CountingStream(private val sink: OutputStream) : OutputStream() {

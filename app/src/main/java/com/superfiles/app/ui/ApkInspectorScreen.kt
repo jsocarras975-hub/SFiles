@@ -193,6 +193,7 @@ private fun OverviewTab(apk: File) {
                 Text("Signature: v1 ${if (s.v1) "✓" else "✗"} · v2 ${if (s.v2) "✓" else "✗"} · " +
                     "v3 ${if (s.v3) "✓" else "✗"}" + if (s.v31) " · v3.1 ✓" else "")
             }
+            item { SignatureVerificationLine(apk, o.sig) }
             section("Signing certificates", o.certs.map {
                 "${it.subject}\nSHA-256 ${it.sha256}\n${it.validFrom} to ${it.validTo}"
             })
@@ -203,6 +204,24 @@ private fun OverviewTab(apk: File) {
             section("Providers", o.providers)
         }
     }
+}
+
+/** Cryptographically verifies the APK's signatures in the background and shows
+ *  whether they actually check out — presence alone (the line above) can't tell
+ *  a valid signature from a tampered one. */
+@Composable
+private fun SignatureVerificationLine(apk: File, sig: SignatureStatus) {
+    val check by produceState<SigVerification?>(null, apk) {
+        value = withContext(Dispatchers.IO) { runCatching { SignatureCheck.verify(apk) }.getOrNull() }
+    }
+    val text = when {
+        check == null -> "Verifying signatures…"
+        !sig.v1 && !sig.v2 && !sig.v3 && !sig.v31 -> "Not signed"
+        check.verified -> "Signatures verified ✓ (v1 ${if (check.v1Verified) "✓" else "✗"} · " +
+            "v2 ${if (check.v2Verified) "✓" else "✗"} · v3 ${if (check.v3Verified) "✓" else "✗"})"
+        else -> "Signature INVALID: ${check.errors.firstOrNull() ?: "verification failed"}"
+    }
+    Text(text, style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable
@@ -534,6 +553,36 @@ private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit, onDexEd
         }
     }
 
+    /** Strips the old signatures and re-signs with this device's key, so the APK
+     *  installs straight away — the plain strip leaves an unsigned file. */
+    fun stripAndSign() {
+        val out = File(apk.parentFile, apk.nameWithoutExtension + "-resigned.apk")
+        busy = true
+        output = null
+        status = "Stripping & signing..."
+        scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    val tmp = File(ctx.cacheDir, "stripped-unsigned.apk")
+                    try {
+                        ApkEditor.stripSignatures(apk, tmp)
+                        ApkEditor.signApk(ctx, tmp, out, o.minSdk)
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+            busy = false
+            if (r.isSuccess) {
+                status = "Saved ${out.name} (${formatSize(out.length())}) — signed, ready to install"
+                output = out
+                BuildHistory.add(ctx, out, apk.name)
+            } else {
+                status = "Failed: ${r.exceptionOrNull()?.message}"
+            }
+        }
+    }
+
     /** Writes a copy of the APK with signatures stripped, or optimized (smaller, deduped). */
     fun stripOrOptimize(optimize: Boolean) {
         val suffix = if (optimize) "-optimized.apk" else "-stripped.apk"
@@ -743,6 +792,11 @@ private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit, onDexEd
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy, onClick = { stripOrOptimize(false) }) { Text("Strip signatures") }
                 Button(enabled = !busy, onClick = { stripOrOptimize(true) }) { Text("Optimize APK") }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy, onClick = { stripAndSign() }) { Text("Strip & sign") }
             }
         }
         item {
