@@ -3,6 +3,7 @@ package com.superfiles.app.data
 import android.content.Context
 import org.jf.baksmali.Adaptors.ClassDefinition
 import org.jf.baksmali.BaksmaliOptions
+import org.jf.baksmali.formatter.BaksmaliWriter
 import org.jf.dexlib2.Opcodes
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
 import org.jf.dexlib2.iface.ClassDef
@@ -60,7 +61,7 @@ object SmaliTools {
         val def = dex.classes.firstOrNull { it.type == ref.type } ?: error("Class not found in ${ref.dex}")
         val sw = StringWriter()
         val w = IndentingWriter(sw)
-        ClassDefinition(BaksmaliOptions(), def).writeTo(w)
+        ClassDefinition(BaksmaliOptions(), def).writeTo(BaksmaliWriter(w))
         w.flush()
         return sw.toString()
     }

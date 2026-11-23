@@ -133,8 +133,8 @@ object ApkInspector {
                     val id = pb.getInt()
                     when (id) {
                         0x7109871a -> v2 = true
-                        0xf05368c0 -> v3 = true
-                        0x1b93ad61 -> v31 = true
+                        0xf05368c0.toInt() -> v3 = true
+                        0x1b93ad61.toInt() -> v31 = true
                     }
                     pb.position(pb.position() + (entryLen - 4).toInt())
                 }
