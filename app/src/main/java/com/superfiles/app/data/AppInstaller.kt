@@ -125,7 +125,7 @@ object AppInstaller {
                             ctx, id, statusIntent,
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
                         )
-                        session.commit(pi)
+                        session.commit(pi.intentSender)
                     } finally {
                         session.close()
                     }
@@ -259,7 +259,7 @@ class InstallStatusReceiver : BroadcastReceiver() {
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             // Android 11 or a device that insists on a confirmation: show the system's prompt.
-            val pending = intent.getParcelableExtra<Intent>(PackageInstaller.EXTRA_INTENT)
+            val pending = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
             pending?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { ctx.startActivity(it) }
             return
         }
