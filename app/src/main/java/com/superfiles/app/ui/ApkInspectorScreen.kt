@@ -86,6 +86,9 @@ import com.superfiles.app.data.ResourceEditor
 import com.superfiles.app.data.ResourceEntry
 import com.superfiles.app.data.ResourceStaging
 import com.superfiles.app.data.ResourceTable
+import com.superfiles.app.data.SigVerification
+import com.superfiles.app.data.SignatureCheck
+import com.superfiles.app.data.SignatureStatus
 import com.superfiles.app.data.SigningKeys
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
