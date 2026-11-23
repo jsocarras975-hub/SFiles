@@ -14,14 +14,20 @@ import kotlinx.coroutines.ensureActive
 
 enum class SortMode { NAME, SIZE, DATE }
 
-class FileItem(val file: File) {
+class FileItem(
+    val file: File,
+    sizeOverride: Long? = null,
+    modifiedOverride: Long? = null,
+    isDirOverride: Boolean? = null,
+    childCountOverride: Int? = null,
+) {
     val name: String = file.name
     val path: String = file.absolutePath
-    val isDir: Boolean = file.isDirectory
-    val size: Long = if (isDir) 0L else file.length()
+    val isDir: Boolean = isDirOverride ?: file.isDirectory
+    val size: Long = sizeOverride ?: if (isDir) 0L else file.length()
     /** Number of direct children for folders (null when the folder can't be read). */
-    val childCount: Int? = if (isDir) file.list()?.size else null
-    val modified: Long = file.lastModified()
+    val childCount: Int? = childCountOverride ?: if (isDir) file.list()?.size else null
+    val modified: Long = modifiedOverride ?: file.lastModified()
 }
 
 object FileRepository {

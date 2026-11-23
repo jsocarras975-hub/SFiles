@@ -9,6 +9,7 @@ import com.superfiles.app.data.ApkInspector
 import com.superfiles.app.data.ManifestEdits
 import com.superfiles.app.data.FileItem
 import com.superfiles.app.data.FileRepository
+import com.superfiles.app.data.Root
 import com.superfiles.app.data.SortMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,8 @@ data class UiState(
     val loading: Boolean = false,
     val message: String? = null,
     val inTrash: Boolean = false,
+    /** When true, listing and file operations go through `su` from "/" instead of normal IO. */
+    val rootMode: Boolean = false,
     /** Copy/move progress: (bytes done, total bytes) plus the item being copied. */
     val progress: Pair<Long, Long>? = null,
     val progressName: String? = null,
@@ -68,6 +71,8 @@ class FileViewModel : ViewModel() {
                 val items = withContext(Dispatchers.IO) {
                     val q = s.query
                     when {
+                        s.rootMode && !q.isNullOrBlank() -> Root.search(s.dir, q)
+                        s.rootMode -> Root.list(s.dir)
                         s.inTrash -> FileRepository.listTrash(root)
                         !q.isNullOrBlank() -> FileRepository.search(s.dir, q, s.showHidden)
                         else -> FileRepository.list(s.dir, s.showHidden, s.sort)
@@ -86,7 +91,19 @@ class FileViewModel : ViewModel() {
     }
 
     fun openTrash() {
+        if (_state.value.rootMode) return // no trash when browsing as root
         _state.update { it.copy(inTrash = true, selected = emptySet(), query = null) }
+        refresh()
+    }
+
+    /** Switches between normal storage browsing and root browsing from "/". */
+    fun toggleRoot() {
+        val s = _state.value
+        if (s.rootMode) {
+            _state.update { it.copy(rootMode = false, dir = root, selected = emptySet(), query = null, inTrash = false) }
+        } else {
+            _state.update { it.copy(rootMode = true, dir = File("/"), selected = emptySet(), query = null, inTrash = false) }
+        }
         refresh()
     }
 
@@ -139,10 +156,14 @@ class FileViewModel : ViewModel() {
                 runCatching {
                     cb.paths.forEach { p ->
                         val f = File(p)
-                        val report: (Long, Long, String) -> Unit = { done, total, name ->
-                            _state.update { it.copy(progress = done to total, progressName = name) }
+                        if (s.rootMode) {
+                            if (cb.cut) Root.move(f, dest) else Root.copy(f, dest)
+                        } else {
+                            val report: (Long, Long, String) -> Unit = { done, total, name ->
+                                _state.update { it.copy(progress = done to total, progressName = name) }
+                            }
+                            if (cb.cut) FileRepository.move(f, dest, report) else FileRepository.copy(f, dest, report)
                         }
-                        if (cb.cut) FileRepository.move(f, dest, report) else FileRepository.copy(f, dest, report)
                     }
                 }.exceptionOrNull()
             }
@@ -159,6 +180,10 @@ class FileViewModel : ViewModel() {
     }
 
     fun zipSelected() {
+        if (_state.value.rootMode) {
+            _state.update { it.copy(message = "Zipping isn't available in root mode") }
+            return
+        }
         val paths = _state.value.selected.toList()
         val dir = _state.value.dir
         _state.update { it.copy(selected = emptySet()) }
@@ -222,7 +247,43 @@ class FileViewModel : ViewModel() {
         }
     }
 
+    /** Copies the selection into another folder (used by the dual-pane "send to other pane"). */
+    fun copySelectedTo(dest: File) {
+        val paths = _state.value.selected.toList()
+        val rootMode = _state.value.rootMode
+        _state.update { it.copy(selected = emptySet()) }
+        viewModelScope.launch {
+            val err = withContext(Dispatchers.IO) {
+                runCatching {
+                    paths.forEach { if (rootMode) Root.copy(File(it), dest) else FileRepository.copy(File(it), dest) }
+                }.exceptionOrNull()
+            }
+            _state.update { it.copy(message = if (err != null) (err.message ?: "Copy failed") else "Copied") }
+            refresh()
+        }
+    }
+
+    /** Moves the selection into another folder (used by the dual-pane "send to other pane"). */
+    fun moveSelectedTo(dest: File) {
+        val paths = _state.value.selected.toList()
+        val rootMode = _state.value.rootMode
+        _state.update { it.copy(selected = emptySet()) }
+        viewModelScope.launch {
+            val err = withContext(Dispatchers.IO) {
+                runCatching {
+                    paths.forEach { if (rootMode) Root.move(File(it), dest) else FileRepository.move(File(it), dest) }
+                }.exceptionOrNull()
+            }
+            _state.update { it.copy(message = if (err != null) (err.message ?: "Move failed") else "Moved") }
+            refresh()
+        }
+    }
+
     fun extractZip(item: FileItem) {
+        if (_state.value.rootMode) {
+            _state.update { it.copy(message = "Extracting isn't available in root mode") }
+            return
+        }
         val dir = _state.value.dir
         viewModelScope.launch {
             val r = withContext(Dispatchers.IO) {
@@ -238,8 +299,10 @@ class FileViewModel : ViewModel() {
 
     fun trashSelected() {
         val paths = _state.value.selected.toList()
+        val rootMode = _state.value.rootMode
         _state.update { it.copy(selected = emptySet()) }
-        runOp("Moved to trash") { paths.forEach { FileRepository.trash(root, File(it)) } }
+        if (rootMode) runOp("Deleted (root files skip the trash)") { paths.forEach { Root.delete(File(it)) } }
+        else runOp("Moved to trash") { paths.forEach { FileRepository.trash(root, File(it)) } }
     }
 
     fun restoreSelected() {
@@ -250,8 +313,10 @@ class FileViewModel : ViewModel() {
 
     fun deleteForeverSelected() {
         val paths = _state.value.selected.toList()
+        val rootMode = _state.value.rootMode
         _state.update { it.copy(selected = emptySet()) }
-        runOp("Deleted") { paths.forEach { FileRepository.deleteForever(File(it)) } }
+        if (rootMode) runOp("Deleted") { paths.forEach { Root.delete(File(it)) } }
+        else runOp("Deleted") { paths.forEach { FileRepository.deleteForever(File(it)) } }
     }
 
     fun emptyTrash() {
@@ -260,12 +325,14 @@ class FileViewModel : ViewModel() {
 
     fun rename(item: FileItem, newName: String) {
         _state.update { it.copy(selected = emptySet()) }
-        runOp(null) { FileRepository.rename(item.file, newName) }
+        if (_state.value.rootMode) runOp(null) { Root.rename(item.file, newName) }
+        else runOp(null) { FileRepository.rename(item.file, newName) }
     }
 
     fun createFolder(name: String) {
         val dir = _state.value.dir
-        runOp(null) { FileRepository.createFolder(dir, name) }
+        if (_state.value.rootMode) runOp(null) { Root.mkdir(dir, name) }
+        else runOp(null) { FileRepository.createFolder(dir, name) }
     }
 
     private fun runOp(okMessage: String?, block: () -> Unit) {

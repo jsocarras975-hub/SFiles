@@ -12,8 +12,8 @@ android {
         applicationId = "com.superfiles.app"
         minSdk = 30
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -45,4 +45,9 @@ dependencies {
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
     implementation("org.smali:smali:2.5.2")
     implementation("org.smali:baksmali:2.5.2")
+    implementation("org.smali:dexlib2:2.5.2")
+    // Archive browsing: ZIP/TAR/7Z via Commons Compress, RAR (read-only) via junrar.
+    implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("com.github.junrar:junrar:7.5.2")
+    implementation("org.tukaani:xz:1.10")
 }

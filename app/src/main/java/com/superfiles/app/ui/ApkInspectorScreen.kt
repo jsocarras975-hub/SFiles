@@ -110,6 +110,16 @@ fun ApkInspectorScreen(apk: File, onClose: () -> Unit) {
         TranslationScreen(apk) { showTranslate = false }
         return
     }
+    var showDexEditor by remember { mutableStateOf(false) }
+    if (showDexEditor) {
+        DexEditorScreen(apk) { showDexEditor = false }
+        return
+    }
+    var showDecompile by remember { mutableStateOf(false) }
+    if (showDecompile) {
+        DecompileScreen(apk) { showDecompile = false }
+        return
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -136,7 +146,7 @@ fun ApkInspectorScreen(apk: File, onClose: () -> Unit) {
                 6 -> SearchTab(apk,
                     onOpenClass = { openClass = it; tab = 5 },
                     onOpenResources = { resQuery = it; tab = 4 })
-                else -> EditTab(apk) { showTranslate = true }
+                else -> EditTab(apk, { showTranslate = true }, { showDexEditor = true }, { showDecompile = true })
             }
         }
     }
@@ -413,13 +423,13 @@ private fun SearchBox(value: String, hint: String, onChange: (String) -> Unit) {
 private val PKG_REGEX = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
 
 @Composable
-private fun EditTab(apk: File, onTranslate: () -> Unit) {
+private fun EditTab(apk: File, onTranslate: () -> Unit, onDexEditor: () -> Unit, onDecompile: () -> Unit) {
     val ctx = LocalContext.current
-    Loaded(apk, { ApkInspector.overview(ctx, apk) }) { o -> EditForm(apk, o, onTranslate) }
+    Loaded(apk, { ApkInspector.overview(ctx, apk) }) { o -> EditForm(apk, o, onTranslate, onDexEditor, onDecompile) }
 }
 
 @Composable
-private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit) {
+private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit, onDexEditor: () -> Unit, onDecompile: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var pkg by remember { mutableStateOf(o.pkg) }
@@ -733,6 +743,12 @@ private fun EditForm(apk: File, o: ApkOverview, onTranslate: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy, onClick = { stripOrOptimize(false) }) { Text("Strip signatures") }
                 Button(enabled = !busy, onClick = { stripOrOptimize(true) }) { Text("Optimize APK") }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onDexEditor) { Text("DEX editor") }
+                Button(onClick = onDecompile) { Text("Decompile / rebuild") }
             }
         }
         if (quickAttrs.isNotEmpty() || quickMinSdk != null || quickTargetSdk != null) {

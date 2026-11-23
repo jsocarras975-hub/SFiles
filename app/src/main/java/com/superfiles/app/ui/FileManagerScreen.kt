@@ -11,6 +11,8 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -79,6 +82,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,14 +95,17 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.superfiles.app.data.ArchiveBrowser
 import com.superfiles.app.data.Bookmarks
 import com.superfiles.app.data.Favorites
 import com.superfiles.app.data.FileItem
 import com.superfiles.app.data.FileRepository
+import com.superfiles.app.data.Root
 import com.superfiles.app.data.SortMode
 import com.superfiles.app.data.SplitInstaller
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private sealed interface Prompt {
@@ -128,13 +136,26 @@ fun FileManagerScreen(
 ) {
     val st by vm.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val vm2: FileViewModel = viewModel(key = "pane2")
+    val st2 by vm2.state.collectAsStateWithLifecycle()
+    var dualPane by rememberSaveable { mutableStateOf(false) }
+    var activePane by remember { mutableIntStateOf(0) }
+    val activeVm = if (activePane == 0) vm else vm2
+    val activeSt by activeVm.state.collectAsStateWithLifecycle()
     var prompt by remember { mutableStateOf<Prompt?>(null) }
+    var promptVm by remember { mutableStateOf<FileViewModel?>(null) }
+    val dialogVm = promptVm ?: activeVm
+    val dialogSt by dialogVm.state.collectAsStateWithLifecycle()
     var props by remember { mutableStateOf<FileItem?>(null) }
+    var propsVm by remember { mutableStateOf<FileViewModel?>(null) }
     var textFile by remember { mutableStateOf<File?>(null) }
     var hexFile by remember { mutableStateOf<File?>(null) }
     var diffPair by remember { mutableStateOf<Pair<File, File>?>(null) }
     var showGrep by remember { mutableStateOf(false) }
+    var showFtp by remember { mutableStateOf(false) }
+    var archiveFile by remember { mutableStateOf<File?>(null) }
     var imageFile by remember { mutableStateOf<File?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var fontFile by remember { mutableStateOf<File?>(null) }
@@ -147,12 +168,20 @@ fun FileManagerScreen(
     val inTrash = st.inTrash
     val atRoot = st.dir.absolutePath == vm.root.absolutePath
     val subScreenOpen = textFile != null || hexFile != null || diffPair != null || showGrep ||
-        imageFile != null || audioFile != null || fontFile != null
+        showFtp || archiveFile != null || imageFile != null || audioFile != null || fontFile != null
+    val backSt = if (dualPane) activeSt else st
 
-    BackHandler(enabled = !subScreenOpen && (selecting || searching || inTrash || !atRoot)) { vm.onBack() }
+    BackHandler(enabled = !subScreenOpen && (backSt.selected.isNotEmpty() || backSt.query != null ||
+        backSt.inTrash || backSt.dir.absolutePath != vm.root.absolutePath)) { activeVm.onBack() }
 
     LaunchedEffect(st.message) {
         st.message?.let { snackbar.showSnackbar(it); vm.consumeMessage() }
+    }
+    LaunchedEffect(activeSt.message, dualPane, activePane) {
+        // Pane 1's messages come through the main effect above; only pane 2 needs its own.
+        if (dualPane && activePane == 1) {
+            activeSt.message?.let { snackbar.showSnackbar(it); activeVm.consumeMessage() }
+        }
     }
 
     /** Opens a file in the right built-in viewer, or another app when there isn't one. */
@@ -163,6 +192,28 @@ fun FileManagerScreen(
             in AUDIO_EXTENSIONS -> audioFile = f
             in FONT_EXTENSIONS -> fontFile = f
             else -> openFile(ctx, f)
+        }
+    }
+
+    /** APK inspector, archive browser, or a viewer — whichever fits the file. */
+    fun openAnyFile(f: File) {
+        when {
+            f.extension.equals("apk", ignoreCase = true) -> onOpenApk(f)
+            ArchiveBrowser.isArchive(f.name) -> archiveFile = f
+            else -> openViewerFor(f)
+        }
+    }
+
+    /** Root toggle: asks su first, since most devices don't have it. */
+    fun toggleRootMode() {
+        if (st.rootMode) {
+            vm.toggleRoot()
+            return
+        }
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { Root.available() }
+            if (ok) vm.toggleRoot()
+            else Toast.makeText(ctx, "This device has no root (su)", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -185,6 +236,15 @@ fun FileManagerScreen(
         GrepScreen(st.dir, { f -> showGrep = false; openViewerFor(f) }, { showGrep = false })
         return
     }
+    if (showFtp) {
+        FtpScreen(vm.root) { showFtp = false }
+        return
+    }
+    val arch = archiveFile
+    if (arch != null) {
+        ArchiveScreen(arch, { f -> openViewerFor(f) }, { archiveFile = null; vm.refresh() })
+        return
+    }
     val img = imageFile
     if (img != null) {
         ImageViewerScreen(img) { imageFile = null }
@@ -203,7 +263,45 @@ fun FileManagerScreen(
 
     Scaffold(
         topBar = {
-            when {
+            if (dualPane) {
+                var moreMenu by remember { mutableStateOf(false) }
+                TopAppBar(
+                    title = { Text("Dual pane") },
+                    navigationIcon = {
+                        IconButton(onClick = { dualPane = false }) { Icon(Icons.Default.Close, "Single pane") }
+                    },
+                    actions = {
+                        Box {
+                            IconButton(onClick = { moreMenu = true }) { Icon(Icons.Default.MoreVert, "More") }
+                            DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("FTP server") },
+                                    onClick = { moreMenu = false; showFtp = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Installed apps") },
+                                    onClick = { moreMenu = false; onShowApps() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Build history") },
+                                    onClick = { moreMenu = false; onShowHistory() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Search in files") },
+                                    onClick = { moreMenu = false; showGrep = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("New text file") },
+                                    onClick = {
+                                        moreMenu = false
+                                        textFile = createTextFile(activeVm.state.value.dir)
+                                    },
+                                )
+                            }
+                        }
+                    },
+                )
+            } else when {
                 selecting && inTrash -> TopAppBar(
                     title = { Text("${st.selected.size} selected") },
                     navigationIcon = {
@@ -281,7 +379,7 @@ fun FileManagerScreen(
                                 st.items.firstOrNull { it.path in st.selected }?.let { prompt = Prompt.Rename(it) }
                             }) { Icon(Icons.Default.DriveFileRenameOutline, "Rename") }
                             IconButton(onClick = {
-                                st.items.firstOrNull { it.path in st.selected }?.let { props = it }
+                                st.items.firstOrNull { it.path in st.selected }?.let { props = it; propsVm = vm }
                             }) { Icon(Icons.Default.Info, "Properties") }
                         }
                         IconButton(onClick = { prompt = Prompt.ConfirmDelete }) { Icon(Icons.Default.Delete, "Delete") }
@@ -321,7 +419,15 @@ fun FileManagerScreen(
                     var sortMenu by remember { mutableStateOf(false) }
                     var moreMenu by remember { mutableStateOf(false) }
                     TopAppBar(
-                        title = { Text(if (atRoot) "Internal storage" else st.dir.name) },
+                        title = {
+                            Text(
+                                when {
+                                    st.rootMode && st.dir.absolutePath == "/" -> "Root /"
+                                    atRoot -> "Internal storage"
+                                    else -> st.dir.name
+                                },
+                            )
+                        },
                         actions = {
                             IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Default.Search, "Search") }
                             Box {
@@ -361,6 +467,18 @@ fun FileManagerScreen(
                                 IconButton(onClick = { moreMenu = true }) { Icon(Icons.Default.MoreVert, "More") }
                                 DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
                                     DropdownMenuItem(
+                                        text = { Text("Dual pane") },
+                                        onClick = { moreMenu = false; dualPane = true },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(if (st.rootMode) "✓ Root explorer" else "Root explorer") },
+                                        onClick = { moreMenu = false; toggleRootMode() },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("FTP server") },
+                                        onClick = { moreMenu = false; showFtp = true },
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Installed apps") },
                                         onClick = { moreMenu = false; onShowApps() },
                                     )
@@ -387,7 +505,9 @@ fun FileManagerScreen(
             }
         },
         bottomBar = {
-            st.clipboard?.let { cb ->
+            val clipSt = if (dualPane) activeSt else st
+            val clipVm = if (dualPane) activeVm else vm
+            clipSt.clipboard?.let { cb ->
                 Surface(tonalElevation = 3.dp) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -396,87 +516,126 @@ fun FileManagerScreen(
                     ) {
                         Text("${cb.paths.size} item(s) to ${if (cb.cut) "move" else "copy"}")
                         Row {
-                            TextButton(onClick = vm::cancelPaste) { Text("Cancel") }
-                            TextButton(onClick = vm::paste) { Text("Paste here") }
+                            TextButton(onClick = clipVm::cancelPaste) { Text("Cancel") }
+                            TextButton(onClick = clipVm::paste) { Text("Paste here") }
                         }
                     }
                 }
             }
         },
         floatingActionButton = {
-            if (!selecting && !searching && !inTrash) {
-                FloatingActionButton(onClick = { prompt = Prompt.NewFolder }) {
+            val fabSt = if (dualPane) activeSt else st
+            if (fabSt.selected.isEmpty() && fabSt.query == null && !fabSt.inTrash) {
+                FloatingActionButton(onClick = { promptVm = activeVm; prompt = Prompt.NewFolder }) {
                     Icon(Icons.Default.CreateNewFolder, "New folder")
                 }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            if (!inTrash) Breadcrumbs(root = vm.root, dir = st.dir, onOpen = vm::open)
-            if (st.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            st.progress?.let { (done, total) ->
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    LinearProgressIndicator(
-                        progress = if (total > 0) done.toFloat() / total else 0f,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text("Copying ${st.progressName.orEmpty()} · ${formatSize(done)} of ${formatSize(total)}",
-                        style = MaterialTheme.typography.bodySmall)
-                }
+        if (dualPane) {
+            Row(Modifier.padding(pad).fillMaxSize()) {
+                FilePane(
+                    vm = vm,
+                    isActive = activePane == 0,
+                    otherDir = st2.dir,
+                    onActivate = { activePane = 0 },
+                    onOpenFile = ::openAnyFile,
+                    onShowProps = { item, paneVm -> props = item; propsVm = paneVm },
+                    onPrompt = { p, paneVm -> promptVm = paneVm; prompt = p },
+                    onCompare = { diffPair = it },
+                    onBookmark = { paths ->
+                        paths.forEach { Bookmarks.toggle(ctx, it) }
+                        bookmarkVersion++
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    Modifier.fillMaxHeight().width(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+                FilePane(
+                    vm = vm2,
+                    isActive = activePane == 1,
+                    otherDir = st.dir,
+                    onActivate = { activePane = 1 },
+                    onOpenFile = ::openAnyFile,
+                    onShowProps = { item, paneVm -> props = item; propsVm = paneVm },
+                    onPrompt = { p, paneVm -> promptVm = paneVm; prompt = p },
+                    onCompare = { diffPair = it },
+                    onBookmark = { paths ->
+                        paths.forEach { Bookmarks.toggle(ctx, it) }
+                        bookmarkVersion++
+                    },
+                    modifier = Modifier.weight(1f),
+                )
             }
-            if (st.items.isEmpty() && !st.loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(if (inTrash) " Trash is empty" else if (searching) "No matches" else "Empty folder")
-                }
-            } else {
-                LazyColumn(Modifier.fillMaxSize()) {
-                    if (atRoot && favorites.isNotEmpty() && !searching && !inTrash) {
-                        item {
-                            Text("Favorites", style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                        }
-                        items(favorites, key = { "fav:$it" }) { path ->
-                            val f = File(path)
-                            ListItem(
-                                headlineContent = { Text(f.name) },
-                                leadingContent = { Icon(Icons.Default.Star, null) },
-                                modifier = Modifier.clickable { vm.open(f) },
-                            )
-                        }
-                    }
-                    if (atRoot && bookmarks.isNotEmpty() && !searching && !inTrash) {
-                        item {
-                            Text("Bookmarks", style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                        }
-                        items(bookmarks, key = { "bm:${it.path}" }) { f ->
-                            ListItem(
-                                headlineContent = { Text(f.name) },
-                                supportingContent = { Text(f.parent.orEmpty()) },
-                                leadingContent = { Icon(Icons.Default.Star, null) },
-                                modifier = Modifier.clickable {
-                                    if (f.isDirectory) vm.open(f) else openViewerFor(f)
-                                },
-                            )
-                        }
-                    }
-                    items(st.items, key = { it.path }) { item ->
-                        FileRow(
-                            item = item,
-                            selected = item.path in st.selected,
-                            showPath = searching,
-                            onClick = {
-                                when {
-                                    inTrash -> vm.toggleSelect(item.path)
-                                    selecting -> vm.toggleSelect(item.path)
-                                    item.isDir -> vm.open(item.file)
-                                    item.file.extension.equals("apk", ignoreCase = true) -> onOpenApk(item.file)
-                                    else -> openViewerFor(item.file)
-                                }
-                            },
-                            onLongClick = { vm.toggleSelect(item.path) },
+        } else {
+            Column(Modifier.padding(pad).fillMaxSize()) {
+                if (!inTrash) Breadcrumbs(root = vm.root, dir = st.dir, onOpen = vm::open)
+                if (st.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                st.progress?.let { (done, total) ->
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        LinearProgressIndicator(
+                            progress = if (total > 0) done.toFloat() / total else 0f,
+                            modifier = Modifier.fillMaxWidth(),
                         )
+                        Text("Copying ${st.progressName.orEmpty()} · ${formatSize(done)} of ${formatSize(total)}",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (st.items.isEmpty() && !st.loading) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(if (inTrash) " Trash is empty" else if (searching) "No matches" else "Empty folder")
+                    }
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (atRoot && favorites.isNotEmpty() && !searching && !inTrash) {
+                            item {
+                                Text("Favorites", style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                            }
+                            items(favorites, key = { "fav:$it" }) { path ->
+                                val f = File(path)
+                                ListItem(
+                                    headlineContent = { Text(f.name) },
+                                    leadingContent = { Icon(Icons.Default.Star, null) },
+                                    modifier = Modifier.clickable { vm.open(f) },
+                                )
+                            }
+                        }
+                        if (atRoot && bookmarks.isNotEmpty() && !searching && !inTrash) {
+                            item {
+                                Text("Bookmarks", style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                            }
+                            items(bookmarks, key = { "bm:${it.path}" }) { f ->
+                                ListItem(
+                                    headlineContent = { Text(f.name) },
+                                    supportingContent = { Text(f.parent.orEmpty()) },
+                                    leadingContent = { Icon(Icons.Default.Star, null) },
+                                    modifier = Modifier.clickable {
+                                        if (f.isDirectory) vm.open(f) else openViewerFor(f)
+                                    },
+                                )
+                            }
+                        }
+                        items(st.items, key = { it.path }) { item ->
+                            FileRow(
+                                item = item,
+                                selected = item.path in st.selected,
+                                showPath = searching,
+                                onClick = {
+                                    when {
+                                        inTrash -> vm.toggleSelect(item.path)
+                                        selecting -> vm.toggleSelect(item.path)
+                                        item.isDir -> vm.open(item.file)
+                                        else -> openAnyFile(item.file)
+                                    }
+                                },
+                                onLongClick = { vm.toggleSelect(item.path) },
+                            )
+                        }
                     }
                 }
             }
@@ -484,10 +643,11 @@ fun FileManagerScreen(
     }
 
     props?.let { item ->
+        val pvm = propsVm ?: vm
         PropertiesDialog(
             item = item,
             onDismiss = { props = null },
-            onExtractZip = { vm.extractZip(item) },
+            onExtractZip = { pvm.extractZip(item) },
             onEditText = { textFile = item.file },
             onHexEdit = { hexFile = item.file },
         )
@@ -495,31 +655,122 @@ fun FileManagerScreen(
 
     when (val p = prompt) {
         Prompt.NewFolder -> NameDialog("New folder", "", "Create",
-            onConfirm = { vm.createFolder(it); prompt = null }, onDismiss = { prompt = null })
+            onConfirm = { dialogVm.createFolder(it); prompt = null; promptVm = null },
+            onDismiss = { prompt = null; promptVm = null })
         is Prompt.Rename -> NameDialog("Rename", p.item.name, "Rename",
-            onConfirm = { vm.rename(p.item, it); prompt = null }, onDismiss = { prompt = null })
+            onConfirm = { dialogVm.rename(p.item, it); prompt = null; promptVm = null },
+            onDismiss = { prompt = null; promptVm = null })
         Prompt.ConfirmDelete -> AlertDialog(
-            onDismissRequest = { prompt = null },
-            title = { Text("Move ${st.selected.size} item(s) to trash?") },
+            onDismissRequest = { prompt = null; promptVm = null },
+            title = { Text("Move ${dialogSt.selected.size} item(s) to trash?") },
             text = { Text("You can restore them from Trash.") },
-            confirmButton = { TextButton(onClick = { vm.trashSelected(); prompt = null }) { Text("Move to trash") } },
-            dismissButton = { TextButton(onClick = { prompt = null }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { dialogVm.trashSelected(); prompt = null; promptVm = null }) { Text("Move to trash") } },
+            dismissButton = { TextButton(onClick = { prompt = null; promptVm = null }) { Text("Cancel") } },
         )
         Prompt.ConfirmDeleteForever -> AlertDialog(
-            onDismissRequest = { prompt = null },
-            title = { Text("Delete ${st.selected.size} item(s) forever?") },
+            onDismissRequest = { prompt = null; promptVm = null },
+            title = { Text("Delete ${dialogSt.selected.size} item(s) forever?") },
             text = { Text("This can't be undone.") },
-            confirmButton = { TextButton(onClick = { vm.deleteForeverSelected(); prompt = null }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { prompt = null }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { dialogVm.deleteForeverSelected(); prompt = null; promptVm = null }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { prompt = null; promptVm = null }) { Text("Cancel") } },
         )
         Prompt.ConfirmEmptyTrash -> AlertDialog(
-            onDismissRequest = { prompt = null },
+            onDismissRequest = { prompt = null; promptVm = null },
             title = { Text("Empty trash?") },
             text = { Text("Everything in the trash will be deleted forever.") },
-            confirmButton = { TextButton(onClick = { vm.emptyTrash(); prompt = null }) { Text("Empty trash") } },
-            dismissButton = { TextButton(onClick = { prompt = null }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { dialogVm.emptyTrash(); prompt = null; promptVm = null }) { Text("Empty trash") } },
+            dismissButton = { TextButton(onClick = { prompt = null; promptVm = null }) { Text("Cancel") } },
         )
         null -> Unit
+    }
+}
+
+/** One side of the dual-pane view: its own folder, selection, and cross-pane actions. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FilePane(
+    vm: FileViewModel,
+    isActive: Boolean,
+    otherDir: File,
+    onActivate: () -> Unit,
+    onOpenFile: (File) -> Unit,
+    onShowProps: (FileItem, FileViewModel) -> Unit,
+    onPrompt: (Prompt, FileViewModel) -> Unit,
+    onCompare: (Pair<File, File>) -> Unit,
+    onBookmark: (List<String>) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val st by vm.state.collectAsStateWithLifecycle()
+    val selecting = st.selected.isNotEmpty()
+    val atRoot = st.dir.absolutePath == vm.root.absolutePath
+    Column(
+        modifier.fillMaxHeight().border(
+            width = if (isActive) 2.dp else 0.dp,
+            color = if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent,
+        ),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                enabled = !atRoot,
+                onClick = { onActivate(); vm.onBack() },
+            ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            Text(
+                when {
+                    st.rootMode && st.dir.absolutePath == "/" -> "Root /"
+                    atRoot -> "Internal storage"
+                    else -> st.dir.name
+                },
+                modifier = Modifier.weight(1f).clickable { onActivate() },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("${st.items.size}", style = MaterialTheme.typography.bodySmall)
+        }
+        Breadcrumbs(root = vm.root, dir = st.dir, onOpen = { onActivate(); vm.open(it) })
+        if (st.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (selecting) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                IconButton(onClick = { vm.copySelection(false) }) { Icon(Icons.Default.ContentCopy, "Copy") }
+                IconButton(onClick = { vm.copySelection(true) }) { Icon(Icons.Default.ContentCut, "Cut") }
+                IconButton(onClick = vm::zipSelected) { Icon(Icons.Default.Archive, "Zip") }
+                IconButton(onClick = { vm.copySelectedTo(otherDir) }) { Text("→") }
+                IconButton(onClick = { vm.moveSelectedTo(otherDir) }) { Text("⇉") }
+                IconButton(onClick = { onBookmark(st.selected.toList()) }) { Icon(Icons.Default.Star, "Bookmark") }
+                if (st.selected.size == 1) {
+                    IconButton(onClick = {
+                        st.items.firstOrNull { it.path in st.selected }?.let { onShowProps(it, vm) }
+                    }) { Icon(Icons.Default.Info, "Properties") }
+                }
+                if (st.selected.map { File(it) }.count { !it.isDirectory } == 2) {
+                    IconButton(onClick = {
+                        val files = st.selected.map { File(it) }.filter { !it.isDirectory }
+                        if (files.size == 2) onCompare(files[0] to files[1])
+                    }) { Text("Diff") }
+                }
+                IconButton(onClick = { onPrompt(Prompt.ConfirmDelete, vm) }) { Icon(Icons.Default.Delete, "Delete") }
+            }
+        }
+        LazyColumn(Modifier.weight(1f)) {
+            items(st.items, key = { it.path }) { item ->
+                FileRow(
+                    item = item,
+                    selected = item.path in st.selected,
+                    showPath = false,
+                    onClick = {
+                        onActivate()
+                        when {
+                            selecting -> vm.toggleSelect(item.path)
+                            item.isDir -> vm.open(item.file)
+                            else -> onOpenFile(item.file)
+                        }
+                    },
+                    onLongClick = { onActivate(); vm.toggleSelect(item.path) },
+                )
+            }
+        }
     }
 }
 
