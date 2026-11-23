@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.superfiles.app.ui.ApkInspectorScreen
 import com.superfiles.app.ui.BuildHistoryScreen
 import com.superfiles.app.ui.FileManagerScreen
+import com.superfiles.app.ui.InstallStatusDialog
 import com.superfiles.app.ui.InstalledAppsScreen
 import java.io.File
 
@@ -70,6 +71,8 @@ private fun AppRoot() {
     // The path (not the File) is saved, so rotating the phone doesn't close the inspector.
     var apkPath by rememberSaveable { mutableStateOf<String?>(null) }
     var screen by rememberSaveable { mutableStateOf("") }
+    // Global install progress dialog — installs run through AppInstaller from anywhere.
+    InstallStatusDialog()
     val openApk = apkPath?.let { File(it) }
     if (granted && openApk != null) {
         ApkInspectorScreen(openApk) { apkPath = null }

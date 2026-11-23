@@ -96,6 +96,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.superfiles.app.data.AppInstaller
 import com.superfiles.app.data.ArchiveBrowser
 import com.superfiles.app.data.Bookmarks
 import com.superfiles.app.data.Favorites
@@ -127,6 +128,9 @@ private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
 private val AUDIO_EXTENSIONS = setOf("mp3", "ogg", "wav", "m4a", "flac")
 private val FONT_EXTENSIONS = setOf("ttf", "otf")
 
+/** App bundle containers: installed as a whole, base APK + splits (+ OBB for XAPK). */
+private val BUNDLE_EXTENSIONS = setOf("xapk", "apks", "apkm")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileManagerScreen(
@@ -157,6 +161,7 @@ fun FileManagerScreen(
     var showGrep by remember { mutableStateOf(false) }
     var showFtp by remember { mutableStateOf(false) }
     var archiveFile by remember { mutableStateOf<File?>(null) }
+    var bundleFile by remember { mutableStateOf<File?>(null) }
     var imageFile by remember { mutableStateOf<File?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var fontFile by remember { mutableStateOf<File?>(null) }
@@ -169,7 +174,8 @@ fun FileManagerScreen(
     val inTrash = st.inTrash
     val atRoot = st.dir.absolutePath == vm.root.absolutePath
     val subScreenOpen = textFile != null || hexFile != null || diffPair != null || showGrep ||
-        showFtp || archiveFile != null || imageFile != null || audioFile != null || fontFile != null
+        showFtp || archiveFile != null || bundleFile != null ||
+        imageFile != null || audioFile != null || fontFile != null
     val backSt = if (dualPane) activeSt else st
 
     BackHandler(enabled = !subScreenOpen && (backSt.selected.isNotEmpty() || backSt.query != null ||
@@ -196,10 +202,11 @@ fun FileManagerScreen(
         }
     }
 
-    /** APK inspector, archive browser, or a viewer — whichever fits the file. */
+    /** APK inspector, bundle installer, archive browser, or a viewer — whichever fits the file. */
     fun openAnyFile(f: File) {
         when {
             f.extension.equals("apk", ignoreCase = true) -> onOpenApk(f)
+            f.extension.lowercase() in BUNDLE_EXTENSIONS -> bundleFile = f
             ArchiveBrowser.isArchive(f.name) -> archiveFile = f
             else -> openViewerFor(f)
         }
@@ -244,6 +251,11 @@ fun FileManagerScreen(
     val arch = archiveFile
     if (arch != null) {
         ArchiveScreen(arch, { f -> openViewerFor(f) }, { archiveFile = null; vm.refresh() })
+        return
+    }
+    val bundle = bundleFile
+    if (bundle != null) {
+        BundleInstallScreen(bundle) { bundleFile = null; vm.refresh() }
         return
     }
     val img = imageFile
@@ -343,6 +355,19 @@ fun FileManagerScreen(
                                 DropdownMenuItem(
                                     text = { Text("Sign APKs") },
                                     onClick = { batchMenu = false; vm.batchSignApks(ctx) },
+                                    enabled = apks.isNotEmpty(),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Install APKs") },
+                                    onClick = {
+                                        batchMenu = false
+                                        if (!AppInstaller.canInstall(ctx)) {
+                                            Toast.makeText(ctx, "Enable \"Install unknown apps\" for SuperFiles first", Toast.LENGTH_LONG).show()
+                                            AppInstaller.openInstallSettings(ctx)
+                                        } else {
+                                            AppInstaller.installManyAsync(ctx, apks)
+                                        }
+                                    },
                                     enabled = apks.isNotEmpty(),
                                 )
                                 DropdownMenuItem(

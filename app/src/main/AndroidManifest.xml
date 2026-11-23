@@ -23,6 +23,14 @@
         android:label="SuperFiles"
         android:theme="@style/Theme.SuperFiles">
 
+        <receiver
+            android:name=".data.InstallStatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.superfiles.app.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
